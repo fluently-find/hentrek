@@ -1,0 +1,420 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Pelacak Gerakan Tangan</title>
+<style>
+  :root{
+    --bg-1: #f4f4f4;
+    --bg-2: #e2e2e2;
+    --ink: #111111;
+    --ink-soft: #5a5a5a;
+    --line: #d6d6d6;
+    --glass: rgba(255,255,255,0.6);
+    --glass-border: rgba(255,255,255,0.9);
+    --sans: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', system-ui, sans-serif;
+    --mono: 'SF Mono', 'IBM Plex Mono', Menlo, monospace;
+  }
+  *{box-sizing:border-box; -webkit-tap-highlight-color:transparent;}
+  html,body{ margin:0; padding:0; }
+  body{
+    font-family:var(--sans);
+    color:var(--ink);
+    min-height:100vh;
+    display:flex;
+    justify-content:center;
+    align-items:center;
+    padding:24px 16px;
+    background: linear-gradient(180deg, var(--bg-1), var(--bg-2));
+    background-attachment:fixed;
+  }
+  main{
+    width:100%;
+    max-width:380px;
+  }
+
+  .stage{
+    position:relative;
+    width:100%;
+    aspect-ratio:9/16;
+    background: linear-gradient(160deg, #ffffff, #ececec);
+    overflow:hidden;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.14), inset 0 0 0 1px rgba(0,0,0,0.05);
+  }
+  video{ display:none; }
+  canvas{
+    position:absolute;
+    inset:0;
+    width:100%;
+    height:100%;
+    transform:scaleX(-1);
+    filter:grayscale(1) contrast(1.05);
+  }
+
+  .placeholder{
+    position:absolute;
+    inset:0;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    flex-direction:column;
+    gap:14px;
+    color:#b6b6b6;
+  }
+  .placeholder .icon-wrap{
+    width:64px; height:64px;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    background:var(--glass);
+    backdrop-filter:blur(20px);
+    -webkit-backdrop-filter:blur(20px);
+    box-shadow: inset 0 0 0 1px rgba(0,0,0,0.06);
+  }
+  .placeholder svg{ width:28px; height:28px; opacity:0.7; color:var(--ink-soft); }
+  .placeholder span{ font-size:0.83rem; color:var(--ink-soft); }
+
+  .readout{
+    position:absolute;
+    top:14px; left:14px;
+    display:flex;
+    align-items:center;
+    gap:7px;
+    font-size:0.75rem;
+    font-weight:500;
+    color:var(--ink);
+    background:rgba(255,255,255,0.7);
+    backdrop-filter:blur(18px);
+    -webkit-backdrop-filter:blur(18px);
+    padding:7px 12px 7px 9px;
+    box-shadow: inset 0 0 0 1px rgba(0,0,0,0.06);
+    opacity:0;
+    transform:translateY(-4px);
+    transition:opacity .25s ease, transform .25s ease;
+  }
+  .readout.show{ opacity:1; transform:translateY(0); }
+  .readout .dot{
+    width:6px; height:6px;
+    border-radius:50%;
+    background:var(--ink);
+  }
+
+  .code-overlay{
+    position:absolute;
+    top:14px; right:14px;
+    max-width:60%;
+    padding:10px 12px;
+    background:rgba(17,17,17,0.68);
+    backdrop-filter:blur(14px);
+    -webkit-backdrop-filter:blur(14px);
+    font-family:var(--mono);
+    font-size:0.6rem;
+    line-height:1.55;
+    color:#f2f2f2;
+    opacity:0;
+    transform:translateY(-4px);
+    transition:opacity .25s ease, transform .25s ease;
+    pointer-events:none;
+    white-space:nowrap;
+    overflow:hidden;
+  }
+  .code-overlay.show{ opacity:1; transform:translateY(0); }
+  .code-line{ overflow:hidden; text-overflow:ellipsis; }
+  .code-line .key{ color:#9c9c9c; }
+  .code-line .punc{ color:rgba(255,255,255,0.3); }
+
+  /* ---- visualizer pergerakan ---- */
+  .visualizer{
+    display:flex;
+    align-items:flex-end;
+    gap:2px;
+    height:48px;
+    margin-top:14px;
+    padding:0 2px;
+  }
+  .bar{
+    flex:1;
+    background:var(--ink);
+    height:3px;
+    transition:height .06s linear;
+  }
+
+  /* ---- shutter button ---- */
+  .controls{
+    display:flex;
+    justify-content:center;
+    margin-top:18px;
+  }
+  .shutter{
+    width:60px;
+    height:60px;
+    border-radius:50%;
+    border:2.5px solid var(--ink);
+    background:#fff;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    padding:0;
+    cursor:pointer;
+  }
+  .shutter .inner{
+    width:46px;
+    height:46px;
+    border-radius:50%;
+    background:var(--ink);
+    transition:all .2s ease;
+  }
+  .shutter.active .inner{
+    width:22px;
+    height:22px;
+    border-radius:6px;
+  }
+
+  .error{
+    display:none;
+    margin-top:12px;
+    padding:11px 14px;
+    background:rgba(0,0,0,0.05);
+    color:var(--ink);
+    font-size:0.8rem;
+    line-height:1.5;
+    box-shadow: inset 0 0 0 1px rgba(0,0,0,0.1);
+  }
+</style>
+</head>
+<body>
+
+<main>
+  <div class="stage">
+    <video id="video" playsinline></video>
+    <canvas id="canvas"></canvas>
+    <div class="placeholder" id="placeholder">
+      <div class="icon-wrap">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <path d="M9 11.5V6a1.5 1.5 0 0 1 3 0v4.5M12 10V4.5a1.5 1.5 0 0 1 3 0V11M15 10.5v-2a1.5 1.5 0 0 1 3 0v6.5c0 3.3-2.7 6-6 6h-1c-2 0-3-.6-4.3-2.1L3.6 15c-.6-.7-.5-1.7.2-2.3.6-.5 1.5-.5 2.1.1L7.5 14.5V7a1.5 1.5 0 0 1 3 0v4.5"/>
+        </svg>
+      </div>
+      <span>Kamera belum aktif</span>
+    </div>
+    <div class="readout" id="readout">
+      <span class="dot"></span>
+      <span id="readoutText">0 tangan</span>
+    </div>
+    <div class="code-overlay" id="codeOverlay">
+      <div class="code-line" id="codeLine0">·</div>
+      <div class="code-line" id="codeLine1">·</div>
+      <div class="code-line" id="codeLine2">·</div>
+      <div class="code-line" id="codeLine3">·</div>
+    </div>
+  </div>
+
+  <div class="visualizer" id="visualizer"></div>
+
+  <div class="controls">
+    <button class="shutter" id="toggleBtn"><span class="inner"></span></button>
+  </div>
+
+  <div class="error" id="errorBox"></div>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+
+<script>
+const video = document.getElementById('video');
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+const placeholder = document.getElementById('placeholder');
+const readout = document.getElementById('readout');
+const readoutText = document.getElementById('readoutText');
+const codeOverlay = document.getElementById('codeOverlay');
+const codeLines = [
+  document.getElementById('codeLine0'),
+  document.getElementById('codeLine1'),
+  document.getElementById('codeLine2'),
+  document.getElementById('codeLine3')
+];
+const toggleBtn = document.getElementById('toggleBtn');
+const errorBox = document.getElementById('errorBox');
+const visualizer = document.getElementById('visualizer');
+
+let camera = null;
+let hands = null;
+let stream = null;
+let running = false;
+let prevLandmarks = null;
+
+// --- setup bar visualizer ---
+const BAR_COUNT = 40;
+const bars = [];
+const history = new Array(BAR_COUNT).fill(0);
+for (let i = 0; i < BAR_COUNT; i++){
+  const b = document.createElement('div');
+  b.className = 'bar';
+  visualizer.appendChild(b);
+  bars.push(b);
+}
+function renderBars(){
+  for (let i = 0; i < BAR_COUNT; i++){
+    const v = history[i];
+    bars[i].style.height = Math.max(3, v * 44) + 'px';
+  }
+}
+renderBars();
+
+function showError(msg){
+  errorBox.textContent = msg;
+  errorBox.style.display = 'block';
+}
+
+function countExtendedFingers(landmarks){
+  let count = 0;
+  if (Math.abs(landmarks[4].x - landmarks[0].x) > Math.abs(landmarks[3].x - landmarks[0].x)) count++;
+  const tips = [8, 12, 16, 20];
+  const pips = [6, 10, 14, 18];
+  for (let i = 0; i < tips.length; i++){
+    if (landmarks[tips[i]].y < landmarks[pips[i]].y) count++;
+  }
+  return count;
+}
+
+function fmt(n){ return n.toFixed(3); }
+
+function renderCode(landmarks){
+  const points = [
+    ['wrist', landmarks[0]],
+    ['thumb', landmarks[4]],
+    ['index', landmarks[8]],
+    ['middle', landmarks[12]]
+  ];
+  points.forEach(([name, p], i) => {
+    codeLines[i].innerHTML =
+      `<span class="key">${name}</span><span class="punc">:</span> x${fmt(p.x)} y${fmt(p.y)} z${fmt(p.z)}`;
+  });
+}
+
+function clearCode(){
+  codeLines.forEach(el => { el.textContent = '·'; });
+}
+
+function pushMovement(magnitude){
+  history.shift();
+  history.push(Math.min(1, magnitude));
+  renderBars();
+}
+
+function onResults(results){
+  canvas.width = video.videoWidth || 360;
+  canvas.height = video.videoHeight || 640;
+  ctx.save();
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
+
+  const handList = results.multiHandLandmarks || [];
+
+  if (handList.length > 0){
+    const fingerCounts = [];
+    for (const landmarks of handList){
+      window.drawConnectors(ctx, landmarks, window.HAND_CONNECTIONS, {
+        color: 'rgba(17,17,17,0.55)',
+        lineWidth: 2
+      });
+      window.drawLandmarks(ctx, landmarks, {
+        color: '#ffffff',
+        fillColor: '#111111',
+        lineWidth: 1.5,
+        radius: 3
+      });
+      fingerCounts.push(countExtendedFingers(landmarks));
+    }
+    readoutText.textContent = `${handList.length} tangan · ${fingerCounts.join('+')} jari`;
+    renderCode(handList[0]);
+
+    // hitung magnitudo gerakan dari perubahan posisi antar frame
+    const current = handList[0];
+    if (prevLandmarks){
+      let total = 0;
+      for (let i = 0; i < current.length; i++){
+        const dx = current[i].x - prevLandmarks[i].x;
+        const dy = current[i].y - prevLandmarks[i].y;
+        total += Math.sqrt(dx*dx + dy*dy);
+      }
+      const avg = total / current.length;
+      pushMovement(avg * 18); // skala biar kelihatan di bar
+    }
+    prevLandmarks = current.map(p => ({ x: p.x, y: p.y }));
+  } else {
+    readoutText.textContent = '0 tangan';
+    clearCode();
+    prevLandmarks = null;
+    pushMovement(0);
+  }
+  ctx.restore();
+}
+
+async function start(){
+  errorBox.style.display = 'none';
+  toggleBtn.disabled = true;
+
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ video: { width: 480, height: 854, facingMode: 'user' } });
+    video.srcObject = stream;
+    await video.play();
+  } catch (err) {
+    toggleBtn.disabled = false;
+    showError('Tidak bisa mengakses kamera. Pastikan izin kamera diberikan, dan halaman diakses lewat HTTPS atau localhost.');
+    return;
+  }
+
+  placeholder.style.display = 'none';
+  readout.classList.add('show');
+  codeOverlay.classList.add('show');
+
+  hands = new window.Hands({
+    locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+  });
+  hands.setOptions({
+    maxNumHands: 2,
+    modelComplexity: 1,
+    minDetectionConfidence: 0.6,
+    minTrackingConfidence: 0.6
+  });
+  hands.onResults(onResults);
+
+  camera = new window.Camera(video, {
+    onFrame: async () => { await hands.send({ image: video }); },
+    width: 480,
+    height: 854
+  });
+  camera.start();
+
+  running = true;
+  toggleBtn.classList.add('active');
+  toggleBtn.disabled = false;
+}
+
+function stop(){
+  if (camera) { camera.stop(); camera = null; }
+  if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  placeholder.style.display = 'flex';
+  readout.classList.remove('show');
+  codeOverlay.classList.remove('show');
+  readoutText.textContent = '0 tangan';
+  clearCode();
+  prevLandmarks = null;
+  history.fill(0);
+  renderBars();
+  running = false;
+  toggleBtn.classList.remove('active');
+}
+
+toggleBtn.addEventListener('click', () => {
+  if (running) stop(); else start();
+});
+</script>
+
+</body>
+</html>
