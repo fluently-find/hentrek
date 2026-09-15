@@ -1,2 +1,0 @@
-# hentrek
-treking tangan
